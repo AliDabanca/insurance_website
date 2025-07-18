@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="tr">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Müşteri Kartları</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+
+        /* Filtre formu stilleri */
+        .filter-form {
+            background: white;
+            padding: 15px 20px;
+            margin-bottom: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            max-width: 800px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: flex-end;
+        }
+
+        .filter-form div {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .filter-form label {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .filter-form input[type="text"],
+        .filter-form select {
+            padding: 6px 10px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+            min-width: 150px;
+            font-size: 1em;
+        }
+
+        .filter-form button {
+            background-color: #007bff;
+            border: none;
+            color: white;
+            padding: 7px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 1em;
+            height: 38px;
+        }
+
+        .filter-form button:hover {
+            background-color: #0056b3;
+        }
+
+        .card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            padding: 15px 20px;
+            max-width: 500px;
+        }
+
+        .card-header {
+            font-weight: bold;
+            font-size: 1.2em;
+            margin-bottom: 8px;
+        }
+
+        .field {
+            margin: 4px 0;
+        }
+
+        /* Başlangıçta gizli olan detaylar için stil */
+        .details {
+            margin-top: 10px;
+            display: none;
+            /* Varsayılan olarak gizli */
+            font-size: 0.9em;
+            color: #555;
+        }
+
+        .policy-item {
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 10px;
+            margin-bottom: 10px;
+            font-size: 0.9em;
+        }
+
+        .policy-item strong {
+            color: #333;
+        }
+
+        .btn {
+            margin-top: 10px;
+            padding: 6px 12px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .btn:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Müşteri Kartları</h1>
+
+    <form method="get" class="filter-form">
+        <div>
+            <label for="search_name">İsim Ara:</label>
+            <input type="text" id="search_name" name="search_name" value="{{ search_name }}"
+                placeholder="İsim giriniz..." />
+        </div>
+
+        <div>
+            <label for="filter_policy">Poliçe Türü:</label>
+            <select id="filter_policy" name="filter_policy">
+                <option value="">Tümü</option>
+                {% for pt in policy_types %}
+                <option value="{{ pt.name }}" {% if pt.selected %}selected{% endif %}>{{ pt.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div>
+            <label for="filter_company">Acenta:</label>
+            <select id="filter_company" name="filter_company">
+                <option value="">Tümü</option>
+                {% for ac in insurance_companies %}
+                <option value="{{ ac.name }}" {% if ac.selected %}selected{% endif %}>{{ ac.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <button type="submit">Filtrele</button>
+    </form>
+
+    {# Sadece show_customers True ise (yani arama/filtre yapıldıysa) müşterileri göster #}
+    {% if show_customers %}
+    {% for customer in customers %}
+    <div class="card">
+        <div class="card-header">{{ customer.name }}</div>
+        <div class="field"><strong>TC:</strong> {{ customer.tc_id }}</div>
+        <div class="field"><strong>Telefon:</strong> {{ customer.phone }}</div>
+        <div class="field"><strong>Meslek:</strong> {{ customer.job }}</div>
+        <div class="field"><strong>Doğum Tarihi:</strong> {{ customer.birth_date|date:"d.m.Y"|default:"-" }}</div>
+        <div class="field"><strong>Memleket:</strong> {{ customer.city }}</div>
+        <div class="field"><strong>Referans:</strong> {{ customer.referans|default:"-" }}</div>
+
+        <button class="btn" onclick="toggleDetails(this)">Detayları Gör</button>
+
+        <div class="details">
+            <h3>Poliçeler:</h3>
+            {% if customer.policies.all %}
+            {% for policy in customer.policies.all %}
+            <div class="policy-item">
+                <p><strong>Poliçe Türü:</strong> {{ policy.policy_type|default:"-" }}</p>
+                <p><strong>Sigorta Şirketi:</strong> {{ policy.insurance_company|default:"-" }}</p>
+                <p><strong>Plaka:</strong> {{ policy.plate|default:"-" }}</p>
+                <p><strong>Ruhsat:</strong> {{ policy.license|default:"-" }}</p>
+                <p><strong>Bitiş Tarihi:</strong> {{ policy.due_date|date:"d.m.Y"|default:"-" }}</p>
+            </div>
+            {% endfor %}
+            {% else %}
+            <p>Bu müşteriye ait poliçe bulunamadı.</p>
+            {% endif %}
+        </div>
+    </div>
+    {% empty %}
+    <p>Hiç müşteri bulunamadı.</p>
+    {% endfor %}
+    {% else %}
+    <p>Lütfen arama yapınız veya filtreleyiniz.</p>
+    {% endif %}
+
+    <script>
+        // Detay göster/gizle butonu
+        function toggleDetails(button) {
+            const details = button.nextElementSibling; // Butonun hemen sonraki kardeşi details div'idir
+            if (details.style.display === 'block') {
+                details.style.display = 'none';
+                button.textContent = 'Detayları Gör';
+            } else {
+                details.style.display = 'block';
+                button.textContent = 'Detayları Gizle';
+            }
+        }
+    </script>
+</body>
+
+</html>
