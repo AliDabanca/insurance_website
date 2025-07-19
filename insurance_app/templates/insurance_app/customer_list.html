@@ -160,7 +160,6 @@
         <div class="field"><strong>Meslek:</strong> {{ customer.job }}</div>
         <div class="field"><strong>Doğum Tarihi:</strong> {{ customer.birth_date|date:"d.m.Y"|default:"-" }}</div>
         <div class="field"><strong>Memleket:</strong> {{ customer.city }}</div>
-        <div class="field"><strong>Referans:</strong> {{ customer.referans|default:"-" }}</div>
 
         <button class="btn" onclick="toggleDetails(this)">Detayları Gör</button>
 
@@ -191,7 +190,7 @@
     <script>
         // Detay göster/gizle butonu
         function toggleDetails(button) {
-            const details = button.nextElementSibling; // Butonun hemen sonraki kardeşi details div'idir
+            const details = button.nextElementSibling;
             if (details.style.display === 'block') {
                 details.style.display = 'none';
                 button.textContent = 'Detayları Gör';

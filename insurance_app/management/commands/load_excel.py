@@ -3,131 +3,142 @@
 import os
 import pandas as pd
 from django.core.management.base import BaseCommand, CommandError
-from insurance_app.models import Customer, Policy # Customer ve Policy modellerini import et
-from django.db import transaction # Atomik işlemler için
-import numpy as np # NaT kontrolü için
+from insurance_app.models import Customer, Policy
+from django.db import transaction
+import numpy as np
+import unicodedata
 
 class Command(BaseCommand):
     help = 'Excel dosyasındaki müşteri ve poliçe verilerini veritabanına aktarır veya günceller.'
 
     def add_arguments(self, parser):
-        # Excel dosyasının yolunu argüman olarak alıyoruz
         parser.add_argument('excel_file', type=str, help='Verilerin alınacağı Excel dosyasının yolu')
 
     def handle(self, *args, **options):
         excel_path = options['excel_file']
 
-        # Excel dosyasının varlığını kontrol et
         if not os.path.exists(excel_path):
             raise CommandError(f"HATA: Excel dosyası bulunamadı: {excel_path}")
 
         try:
-            # Excel dosyasını oku
             df = pd.read_excel(excel_path)
+            self.stdout.write(self.style.SUCCESS(f'Excel dosyası başarıyla yüklendi: {excel_path}'))
         except Exception as e:
             raise CommandError(f"HATA: Excel dosyasını okurken bir sorun oluştu: {e}")
 
-        # Sütun adlarını Django model alan adlarına uygun hale getir
-        # Excel başlıklarını dikkatlice kontrol et ve eşleştir!
-        df.rename(columns={
-            'MÜŞTERİ': 'name',
-            'PLAKA': 'plate',
-            'TC': 'tc_id',
-            'RUHSAT': 'license',
-            'DOĞUM TARİHİ': 'birth_date',
-            'ŞEHİR': 'city',
-            'TELEFON': 'phone',
-            'MESLEK': 'job',
-            'POLİÇE': 'policy_type',
-            'SİGORTA SİRKETİ': 'insurance_company', # Excel'deki 'SİRKETİ' ile eşleşti
-            'TARİH': 'due_date',
-            'REFERANS': 'referans' # Excel'deki 'REFERANS' ile eşleşti
-        }, inplace=True)
+        original_columns = df.columns
+        new_columns = []
+        for col in original_columns:
+            normalized_col = col.strip().lower()
+            normalized_col = unicodedata.normalize('NFKD', normalized_col).encode('ascii', 'ignore').decode('utf-8')
+            normalized_col = normalized_col.replace(' ', '_').replace('.', '').replace('/', '').replace('\\', '').replace('i̇', 'i')
+            new_columns.append(normalized_col)
+        df.columns = new_columns
+        
+        self.stdout.write(self.style.NOTICE(f'Normalleştirilmiş Sütun İsimleri: {df.columns.tolist()}'))
 
-        # Modelinizdeki tüm beklenen alanları kontrol edin ve Excel'de olmayanlar için None atayın
-        # Bu, get() yerine doğrudan df[col] kullanırken KeyError almayı engeller
-        expected_columns = [
-            'name', 'tc_id', 'birth_date', 'city', 'phone', 'job', 'referans', # Customer modeline ait alanlar
-            'plate', 'license', 'policy_type', 'insurance_company', 'due_date' # Policy modeline ait alanlar
-        ]
-        for col in expected_columns:
-            if col not in df.columns:
-                df[col] = None
-
-        # Tarih formatını düzelt
-        date_columns = ['birth_date', 'due_date']
-        for col in date_columns:
-            if col in df.columns and df[col].dtype != '<M8[ns]': # Zaten tarih ise tekrar çevirme
-                df[col] = pd.to_datetime(df[col], errors='coerce', dayfirst=True) # Hatalı tarihleri NaT (Not a Time) yapar
-
-        # Eksik string ve sayısal değerleri doldur
-        # TC_ID ve Telefon gibi unique veya sayısal olması beklenen alanlara dikkat et.
-        # Modelde default olarak '-' verdiğin için burada da '-' ile doldurabiliriz.
-        customer_str_fields = ['name', 'tc_id', 'city', 'phone', 'job', 'referans']
-        policy_str_fields = ['plate', 'license', 'policy_type', 'insurance_company']
-
-        for col in customer_str_fields:
-            if col in df.columns:
-                df[col] = df[col].fillna('-').astype(str)
-        for col in policy_str_fields:
-            if col in df.columns:
-                df[col] = df[col].fillna('-').astype(str)
-
-        # TC_ID'nin benzersizliğini ve formatını garanti altına al
-        if 'tc_id' in df.columns:
-            df['tc_id'] = df['tc_id'].apply(lambda x: str(x).strip().replace('.0', '') if pd.notna(x) else '-')
-
-        self.stdout.write(self.style.SUCCESS("Veritabanına aktarım işlemi başlıyor..."))
-
-        # Toplu işlem (transaction) kullanarak performansı artır ve hatalarda geri almayı sağla
         with transaction.atomic():
             for index, row in df.iterrows():
+                excel_row_num = index + 2 
+
                 try:
-                    tc_id_value = row['tc_id']
-                    if not tc_id_value or tc_id_value == '-':
-                        self.stdout.write(self.style.WARNING(f"⚠️ Satır {index + 1}: TC kimlik numarası boş veya '-' olduğu için atlanıyor. Veri: {row.to_dict()}"))
+                    customer_name_candidates = ['musteri', 'musteri_adi', 'ad_soyad', 'name']
+                    customer_name = None
+                    for candidate in customer_name_candidates:
+                        if candidate in row and pd.notna(row[candidate]):
+                            customer_name = str(row[candidate]).strip()
+                            break
+                    
+                    if not customer_name:
+                        self.stderr.write(self.style.WARNING(f'Satır {excel_row_num}: Müşteri adı boş veya bulunamadı. Müşteri atlanıyor. Satır Verisi: {row.to_dict()}'))
                         continue
 
-                    # Tarih değerlerini None'a çevir eğer NaT ise (Django'nun DateField'ı için)
-                    birth_date_val = row.get('birth_date', None)
-                    if pd.isna(birth_date_val): # Pandas NaT veya np.nan kontrolü için
-                        birth_date_val = None
+                    customer_name = unicodedata.normalize('NFKD', customer_name).encode('ascii', 'ignore').decode('utf-8').upper()
 
-                    due_date_val = row.get('due_date', None)
-                    if pd.isna(due_date_val): # Pandas NaT veya np.nan kontrolü için
-                        due_date_val = None
+                    tc_id_candidates = ['tc', 'tc_kimlik_no', 'tckimlik', 'tc_id']
+                    tc_id = None
+                    for candidate in tc_id_candidates:
+                        if candidate in row and pd.notna(row[candidate]):
+                            tc_id = str(int(row[candidate])).strip()
+                            break
+                    
+                    if not tc_id:
+                        self.stderr.write(self.style.WARNING(f'Satır {excel_row_num}: TC Kimlik No boş veya bulunamadı. Müşteri atlanıyor. Satır Verisi: {row.to_dict()}'))
+                        continue
 
-                    # 1. Müşteriyi Oluştur veya Güncelle
-                    # customer.objects.update_or_create sadece Customer modelinde bulunan alanları kabul etmeli
-                    customer, created_customer = Customer.objects.update_or_create(
-                        tc_id=tc_id_value,
-                        defaults={
-                            'name': row.get('name', 'Bilinmiyor'),
-                            'birth_date': birth_date_val,
-                            'city': row.get('city', '-'),
-                            'phone': row.get('phone', '-'),
-                            'job': row.get('job', '-'),
-                            'referans': row.get('referans', '-'),
-                        }
+                    phone_candidates = ['telefon', 'tel', 'phone']
+                    phone = None
+                    for candidate in phone_candidates:
+                        if candidate in row and pd.notna(row[candidate]):
+                            phone = str(int(row[candidate])).strip()
+                            break
+                    if phone is None:
+                        phone = None
+
+                    customer_data = {
+                        'name': customer_name,
+                        'tc_id': tc_id,
+                        'phone': phone,
+                        'job': row.get('meslek', None) if pd.notna(row.get('meslek')) else None,
+                        'birth_date': pd.to_datetime(row.get('dogum_tarihi'), errors='coerce').date() if pd.notna(row.get('dogum_tarihi')) else None,
+                        'city': row.get('sehir', None) if pd.notna(row.get('sehir')) else None,
+                    }
+
+                    for key, value in customer_data.items():
+                        if pd.isna(value) or value == '':
+                            customer_data[key] = None
+                        if isinstance(value, str):
+                            customer_data[key] = value.strip()
+
+
+                    customer, created = Customer.objects.update_or_create(
+                        tc_id=customer_data['tc_id'],
+                        defaults={k: v for k, v in customer_data.items() if k != 'tc_id'}
                     )
-                    if created_customer:
-                        self.stdout.write(self.style.SUCCESS(f"✅ Satır {index + 1}: Yeni müşteri oluşturuldu: {customer.name} (TC: {customer.tc_id})"))
-                    # else: # Müşteri zaten var mesajını çok fazla basmaması için kapatılabilir
-                    #    self.stdout.write(self.style.MIGRATE_HEADING(f"🔄 Satır {index + 1}: Mevcut müşteri güncellendi: {customer.name} (TC: {customer.tc_id})"))
+                    if created:
+                        self.stdout.write(self.style.SUCCESS(f'Müşteri oluşturuldu: {customer.name}'))
+                    
+                    policy_type_candidates = ['poliçe', 'police_turu', 'policy_type', 'police']
+                    policy_type = None
+                    for candidate in policy_type_candidates:
+                        if candidate in row and pd.notna(row[candidate]):
+                            policy_type = str(row[candidate]).strip()
+                            break
+                    
+                    if pd.isna(policy_type) or not policy_type:
+                        self.stdout.write(self.style.WARNING(f'Satır {excel_row_num}: Poliçe türü boş veya bulunamadı. Poliçe oluşturulmadı. Satır Verisi: {row.to_dict()}'))
+                        continue
 
-                    # 2. Poliçeyi Oluştur
-                    # Her Excel satırı için bir poliçe oluşturuyoruz, aynı TC'ye sahip olsa bile
+                    insurance_company_candidates = ['sigorta_şirketi', 'sigorta_sirketi', 'insurance_company']
+                    insurance_company = None
+                    for candidate in insurance_company_candidates:
+                        if candidate in row and pd.notna(row[candidate]):
+                            insurance_company = str(row[candidate]).strip()
+                            break
+                    if pd.isna(insurance_company):
+                        insurance_company = None
+                    
+                    plate = str(row.get('plaka', '')).strip() if pd.notna(row.get('plaka')) else None
+                    license_val = str(row.get('ruhsat', '')).strip() if pd.notna(row.get('ruhsat')) else None
+                    due_date = pd.to_datetime(row.get('tarih'), errors='coerce').date() if pd.notna(row.get('tarih')) else None
+
+                    # Her zaman yeni bir Policy nesnesi oluştur (update_or_create yerine)
+                    # Çünkü bir müşteri için aynı poliçe türünden birden fazla poliçe olabilir
                     Policy.objects.create(
-                        customer=customer, # Yukarıda oluşturulan/bulunan Customer nesnesi ile ilişkilendir
-                        plate=row.get('plate', '-'),
-                        license=row.get('license', '-'),
-                        policy_type=row.get('policy_type', '-'),
-                        insurance_company=row.get('insurance_company', '-'),
-                        due_date=due_date_val
+                        customer=customer,
+                        policy_type=policy_type,
+                        insurance_company=insurance_company,
+                        plate=plate,
+                        license=license_val,
+                        due_date=due_date
                     )
-                    self.stdout.write(self.style.SUCCESS(f"✅ Satır {index + 1}: Poliçe oluşturuldu: {customer.name} - {row.get('policy_type', '-')}"))
+                    self.stdout.write(self.style.SUCCESS(f'Poliçe oluşturuldu: {policy_type} for {customer.name}'))
 
+                except KeyError as ke:
+                    self.stderr.write(self.style.ERROR(f'Satır {excel_row_num}: Excel dosyasında eksik veya yanlış adlandırılmış sütun: {ke}. Lütfen sütun adlarını kontrol edin.'))
+                    self.stderr.write(self.style.ERROR(f'Sorunlu satır verileri (ham): {row.to_dict()}'))
                 except Exception as e:
-                    self.stdout.write(self.style.ERROR(f"❌ Satır {index + 1} kaydedilemedi: {e} - Veri: {row.to_dict()}"))
+                    self.stderr.write(self.style.ERROR(f'Satır {excel_row_num} işlenirken beklenmeyen hata oluştu: {e}'))
+                    self.stderr.write(self.style.ERROR(f'Sorunlu satır verileri (ham): {row.to_dict()}'))
 
-        self.stdout.write(self.style.SUCCESS("✅ Excel verileri aktarma işlemi tamamlandı."))
+        self.stdout.write(self.style.SUCCESS('Veri yükleme tamamlandı!'))
